@@ -10,8 +10,17 @@
 #include <grp.h>
 #include <time.h>
 #include <sys/ioctl.h>
+#include <limits.h>
+#include <errno.h>
 
-/* Compare names alphabetically */
+#define BLUE  "\033[1;34m"
+#define GREEN "\033[1;32m"
+#define CYAN  "\033[1;36m"
+#define RESET "\033[0m"
+
+int recursive_mode = 0;
+
+/* Compare filenames alphabetically */
 int compare_names(const void *a, const void *b)
 {
     const char *name1 = *(const char **)a;
@@ -19,7 +28,7 @@ int compare_names(const void *a, const void *b)
     return strcasecmp(name1, name2);
 }
 
-/* Print filename with color */
+/* Print a filename with color */
 void print_name(const char *path, const char *name)
 {
     struct stat info;
@@ -30,11 +39,11 @@ void print_name(const char *path, const char *name)
     }
 
     if (S_ISDIR(info.st_mode))
-        printf("\033[1;34m%s\033[0m", name);
-    else if (info.st_mode & S_IXUSR)
-        printf("\033[1;32m%s\033[0m", name);
+        printf(BLUE "%s" RESET, name);
     else if (S_ISLNK(info.st_mode))
-        printf("\033[1;36m%s\033[0m", name);
+        printf(CYAN "%s" RESET, name);
+    else if (info.st_mode & S_IXUSR)
+        printf(GREEN "%s" RESET, name);
     else
         printf("%s", name);
 }
@@ -57,13 +66,17 @@ void print_permissions(mode_t mode)
 /* Print long listing */
 void print_long(const char *dir, const char *name)
 {
-    char path[4096];
+    char path[PATH_MAX];
     struct stat info;
 
-    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (snprintf(path, sizeof(path), "%s/%s", dir, name)
+        >= (int)sizeof(path)) {
+        fprintf(stderr, "Path too long: %s/%s\n", dir, name);
+        return;
+    }
 
     if (lstat(path, &info) == -1) {
-        perror(name);
+        perror(path);
         return;
     }
 
@@ -120,18 +133,21 @@ void print_columns(char **names, int count, int max_len,
             int index = col * rows + row;
 
             if (index < count) {
-                char path[4096];
-                snprintf(path, sizeof(path), "%s/%s",
-                         dir, names[index]);
+                char path[PATH_MAX];
 
-                print_name(path, names[index]);
+                if (snprintf(path, sizeof(path), "%s/%s",
+                             dir, names[index]) >= (int)sizeof(path)) {
+                    printf("%s", names[index]);
+                } else {
+                    print_name(path, names[index]);
+                }
 
                 int padding = col_width - (int)strlen(names[index]);
                 for (int p = 0; p < padding; p++)
                     putchar(' ');
             }
         }
-        printf("\n");
+        putchar('\n');
     }
 }
 
@@ -145,14 +161,18 @@ void print_horizontal(char **names, int count, int max_len,
 
     for (int i = 0; i < count; i++) {
         if (position > 0 && position + col_width > width) {
-            printf("\n");
+            putchar('\n');
             position = 0;
         }
 
-        char path[4096];
-        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        char path[PATH_MAX];
 
-        print_name(path, names[i]);
+        if (snprintf(path, sizeof(path), "%s/%s",
+                     dir, names[i]) >= (int)sizeof(path)) {
+            printf("%s", names[i]);
+        } else {
+            print_name(path, names[i]);
+        }
 
         int padding = col_width - (int)strlen(names[i]);
         for (int p = 0; p < padding; p++)
@@ -162,10 +182,10 @@ void print_horizontal(char **names, int count, int max_len,
     }
 
     if (count > 0)
-        printf("\n");
+        putchar('\n');
 }
 
-/* Read and display directory contents */
+/* List a directory; recurse into its subdirectories when -R is used */
 void do_ls(const char *dir, int mode)
 {
     DIR *dp = opendir(dir);
@@ -190,12 +210,20 @@ void do_ls(const char *dir, int mode)
     struct dirent *entry;
 
     while ((entry = readdir(dp)) != NULL) {
-        if (entry->d_name[0] == '.')
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0 ||
+            entry->d_name[0] == '.')
             continue;
 
         if (count == capacity) {
-            capacity *= 2;
-            char **temp = realloc(names, capacity * sizeof(char *));
+            if (capacity > 2147483647 / 2) {
+                fprintf(stderr, "Too many entries\n");
+                break;
+            }
+
+            int new_capacity = capacity * 2;
+            char **temp = realloc(names,
+                                  new_capacity * sizeof(char *));
 
             if (temp == NULL) {
                 perror("realloc");
@@ -203,6 +231,7 @@ void do_ls(const char *dir, int mode)
             }
 
             names = temp;
+            capacity = new_capacity;
         }
 
         names[count] = strdup(entry->d_name);
@@ -212,7 +241,7 @@ void do_ls(const char *dir, int mode)
             break;
         }
 
-        int len = strlen(names[count]);
+        int len = (int)strlen(names[count]);
         if (len > max_len)
             max_len = len;
 
@@ -221,8 +250,12 @@ void do_ls(const char *dir, int mode)
 
     closedir(dp);
 
-    /* Sort filenames alphabetically */
+    /* Alphabetical sorting */
     qsort(names, count, sizeof(char *), compare_names);
+
+    if (recursive_mode) {
+        printf("%s:\n", dir);
+    }
 
     if (mode == 1) {
         for (int i = 0; i < count; i++)
@@ -231,6 +264,23 @@ void do_ls(const char *dir, int mode)
         print_horizontal(names, count, max_len, dir);
     } else if (count > 0) {
         print_columns(names, count, max_len, dir);
+    }
+
+    if (recursive_mode) {
+        for (int i = 0; i < count; i++) {
+            char path[PATH_MAX];
+            struct stat info;
+
+            if (snprintf(path, sizeof(path), "%s/%s",
+                         dir, names[i]) >= (int)sizeof(path))
+                continue;
+
+            /* lstat avoids following directory symlinks */
+            if (lstat(path, &info) == 0 && S_ISDIR(info.st_mode)) {
+                putchar('\n');
+                do_ls(path, mode);
+            }
+        }
     }
 
     for (int i = 0; i < count; i++)
@@ -245,13 +295,16 @@ int main(int argc, char *argv[])
     int mode = 0;
     int option;
 
-    while ((option = getopt(argc, argv, "lx")) != -1) {
+    while ((option = getopt(argc, argv, "lxR")) != -1) {
         if (option == 'l')
             mode = 1;
         else if (option == 'x')
             mode = 2;
+        else if (option == 'R')
+            recursive_mode = 1;
         else {
-            fprintf(stderr, "Usage: %s [-l|-x] [directory]\n",
+            fprintf(stderr,
+                    "Usage: %s [-l] [-x] [-R] [directory]\n",
                     argv[0]);
             return 1;
         }
@@ -267,7 +320,7 @@ int main(int argc, char *argv[])
             do_ls(argv[i], mode);
 
             if (i < argc - 1)
-                puts("");
+                putchar('\n');
         }
     }
 
