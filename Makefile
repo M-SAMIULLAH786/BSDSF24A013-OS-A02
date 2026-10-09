@@ -1,0 +1,13 @@
+CC = gcc
+CFLAGS = -Wall -Wextra
+TARGET = bin/ls
+SOURCE = src/ls-v1.0.0.c
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE)
+	mkdir -p bin
+	$(CC) $(CFLAGS) $(SOURCE) -o $(TARGET)
+
+clean:
+	rm -f $(TARGET)
