@@ -11,13 +11,32 @@
 #include <time.h>
 #include <sys/ioctl.h>
 
-/* Compare filenames alphabetically, ignoring case */
+/* Compare names alphabetically */
 int compare_names(const void *a, const void *b)
 {
     const char *name1 = *(const char **)a;
     const char *name2 = *(const char **)b;
-
     return strcasecmp(name1, name2);
+}
+
+/* Print filename with color */
+void print_name(const char *path, const char *name)
+{
+    struct stat info;
+
+    if (lstat(path, &info) == -1) {
+        printf("%s", name);
+        return;
+    }
+
+    if (S_ISDIR(info.st_mode))
+        printf("\033[1;34m%s\033[0m", name);
+    else if (info.st_mode & S_IXUSR)
+        printf("\033[1;32m%s\033[0m", name);
+    else if (S_ISLNK(info.st_mode))
+        printf("\033[1;36m%s\033[0m", name);
+    else
+        printf("%s", name);
 }
 
 /* Print file permissions */
@@ -65,7 +84,8 @@ void print_long(const char *dir, const char *name)
         printf("%s ", date);
     }
 
-    printf("%s\n", name);
+    print_name(path, name);
+    printf("\n");
 }
 
 /* Get terminal width */
@@ -81,7 +101,8 @@ int get_terminal_width(void)
 }
 
 /* Default display: down then across */
-void print_columns(char **names, int count, int max_len)
+void print_columns(char **names, int count, int max_len,
+                   const char *dir)
 {
     int width = get_terminal_width();
     int col_width = max_len + 2;
@@ -98,15 +119,25 @@ void print_columns(char **names, int count, int max_len)
         for (int col = 0; col < columns; col++) {
             int index = col * rows + row;
 
-            if (index < count)
-                printf("%-*s", col_width, names[index]);
+            if (index < count) {
+                char path[4096];
+                snprintf(path, sizeof(path), "%s/%s",
+                         dir, names[index]);
+
+                print_name(path, names[index]);
+
+                int padding = col_width - (int)strlen(names[index]);
+                for (int p = 0; p < padding; p++)
+                    putchar(' ');
+            }
         }
         printf("\n");
     }
 }
 
 /* Horizontal display: -x */
-void print_horizontal(char **names, int count, int max_len)
+void print_horizontal(char **names, int count, int max_len,
+                      const char *dir)
 {
     int width = get_terminal_width();
     int col_width = max_len + 2;
@@ -118,7 +149,15 @@ void print_horizontal(char **names, int count, int max_len)
             position = 0;
         }
 
-        printf("%-*s", col_width, names[i]);
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+
+        print_name(path, names[i]);
+
+        int padding = col_width - (int)strlen(names[i]);
+        for (int p = 0; p < padding; p++)
+            putchar(' ');
+
         position += col_width;
     }
 
@@ -156,9 +195,7 @@ void do_ls(const char *dir, int mode)
 
         if (count == capacity) {
             capacity *= 2;
-
-            char **temp = realloc(names,
-                                  capacity * sizeof(char *));
+            char **temp = realloc(names, capacity * sizeof(char *));
 
             if (temp == NULL) {
                 perror("realloc");
@@ -176,7 +213,6 @@ void do_ls(const char *dir, int mode)
         }
 
         int len = strlen(names[count]);
-
         if (len > max_len)
             max_len = len;
 
@@ -185,16 +221,16 @@ void do_ls(const char *dir, int mode)
 
     closedir(dp);
 
-    /* Feature 5: Sort filenames alphabetically */
+    /* Sort filenames alphabetically */
     qsort(names, count, sizeof(char *), compare_names);
 
     if (mode == 1) {
         for (int i = 0; i < count; i++)
             print_long(dir, names[i]);
     } else if (mode == 2) {
-        print_horizontal(names, count, max_len);
+        print_horizontal(names, count, max_len, dir);
     } else if (count > 0) {
-        print_columns(names, count, max_len);
+        print_columns(names, count, max_len, dir);
     }
 
     for (int i = 0; i < count; i++)
@@ -215,8 +251,7 @@ int main(int argc, char *argv[])
         else if (option == 'x')
             mode = 2;
         else {
-            fprintf(stderr,
-                    "Usage: %s [-l|-x] [directory]\n",
+            fprintf(stderr, "Usage: %s [-l|-x] [directory]\n",
                     argv[0]);
             return 1;
         }
