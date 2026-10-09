@@ -4,13 +4,23 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <string.h>
-#include <errno.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
 #include <sys/ioctl.h>
 
+/* Compare filenames alphabetically, ignoring case */
+int compare_names(const void *a, const void *b)
+{
+    const char *name1 = *(const char **)a;
+    const char *name2 = *(const char **)b;
+
+    return strcasecmp(name1, name2);
+}
+
+/* Print file permissions */
 void print_permissions(mode_t mode)
 {
     printf("%c", S_ISDIR(mode) ? 'd' : S_ISLNK(mode) ? 'l' : '-');
@@ -25,6 +35,7 @@ void print_permissions(mode_t mode)
     printf("%c", mode & S_IXOTH ? 'x' : '-');
 }
 
+/* Print long listing */
 void print_long(const char *dir, const char *name)
 {
     char path[4096];
@@ -57,6 +68,7 @@ void print_long(const char *dir, const char *name)
     printf("%s\n", name);
 }
 
+/* Get terminal width */
 int get_terminal_width(void)
 {
     struct winsize ws;
@@ -68,6 +80,7 @@ int get_terminal_width(void)
     return 80;
 }
 
+/* Default display: down then across */
 void print_columns(char **names, int count, int max_len)
 {
     int width = get_terminal_width();
@@ -92,6 +105,7 @@ void print_columns(char **names, int count, int max_len)
     }
 }
 
+/* Horizontal display: -x */
 void print_horizontal(char **names, int count, int max_len)
 {
     int width = get_terminal_width();
@@ -112,6 +126,7 @@ void print_horizontal(char **names, int count, int max_len)
         printf("\n");
 }
 
+/* Read and display directory contents */
 void do_ls(const char *dir, int mode)
 {
     DIR *dp = opendir(dir);
@@ -121,7 +136,10 @@ void do_ls(const char *dir, int mode)
         return;
     }
 
-    int capacity = 10, count = 0, max_len = 0;
+    int capacity = 10;
+    int count = 0;
+    int max_len = 0;
+
     char **names = malloc(capacity * sizeof(char *));
 
     if (names == NULL) {
@@ -138,21 +156,27 @@ void do_ls(const char *dir, int mode)
 
         if (count == capacity) {
             capacity *= 2;
-            char **temp = realloc(names, capacity * sizeof(char *));
+
+            char **temp = realloc(names,
+                                  capacity * sizeof(char *));
+
             if (temp == NULL) {
                 perror("realloc");
                 break;
             }
+
             names = temp;
         }
 
         names[count] = strdup(entry->d_name);
+
         if (names[count] == NULL) {
             perror("strdup");
             break;
         }
 
         int len = strlen(names[count]);
+
         if (len > max_len)
             max_len = len;
 
@@ -160,6 +184,9 @@ void do_ls(const char *dir, int mode)
     }
 
     closedir(dp);
+
+    /* Feature 5: Sort filenames alphabetically */
+    qsort(names, count, sizeof(char *), compare_names);
 
     if (mode == 1) {
         for (int i = 0; i < count; i++)
@@ -176,6 +203,7 @@ void do_ls(const char *dir, int mode)
     free(names);
 }
 
+/* Main function */
 int main(int argc, char *argv[])
 {
     int mode = 0;
@@ -187,7 +215,9 @@ int main(int argc, char *argv[])
         else if (option == 'x')
             mode = 2;
         else {
-            fprintf(stderr, "Usage: %s [-l|-x] [directory]\n", argv[0]);
+            fprintf(stderr,
+                    "Usage: %s [-l|-x] [directory]\n",
+                    argv[0]);
             return 1;
         }
     }
