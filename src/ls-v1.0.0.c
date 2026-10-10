@@ -28,40 +28,84 @@ int compare_names(const void *a, const void *b)
     return strcasecmp(name1, name2);
 }
 
-/* Print a filename with color */
+/* Print a filename with the required colors */
 void print_name(const char *path, const char *name)
 {
     struct stat info;
+    size_t len = strlen(name);
 
     if (lstat(path, &info) == -1) {
         printf("%s", name);
         return;
     }
 
-    if (S_ISDIR(info.st_mode))
-        printf(BLUE "%s" RESET, name);
-    else if (S_ISLNK(info.st_mode))
-        printf(CYAN "%s" RESET, name);
-    else if (info.st_mode & S_IXUSR)
-        printf(GREEN "%s" RESET, name);
-    else
+    /* Directories: blue */
+    if (S_ISDIR(info.st_mode)) {
+        printf("\033[1;34m%s\033[0m", name);
+    }
+    /* Symbolic links: pink */
+    else if (S_ISLNK(info.st_mode)) {
+        printf("\033[1;35m%s\033[0m", name);
+    }
+    /* Special files: reverse video */
+    else if (S_ISCHR(info.st_mode) ||
+             S_ISBLK(info.st_mode) ||
+             S_ISFIFO(info.st_mode) ||
+             S_ISSOCK(info.st_mode)) {
+        printf("\033[7m%s\033[0m", name);
+    }
+    /* Archive files: red */
+    else if ((len >= 4 &&
+              (strcasecmp(name + len - 4, ".tar") == 0 ||
+               strcasecmp(name + len - 4, ".zip") == 0)) ||
+             (len >= 3 &&
+              strcasecmp(name + len - 3, ".gz") == 0)) {
+        printf("\033[1;31m%s\033[0m", name);
+    }
+    /* Executable files: green */
+    else if (info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) {
+        printf("\033[1;32m%s\033[0m", name);
+    }
+    /* Normal files: no color */
+    else {
         printf("%s", name);
+    }
 }
-
 /* Print file permissions */
+
+/* Print file permissions, including special bits */
 void print_permissions(mode_t mode)
 {
-    printf("%c", S_ISDIR(mode) ? 'd' : S_ISLNK(mode) ? 'l' : '-');
+    printf("%c",
+           S_ISDIR(mode) ? 'd' :
+           S_ISLNK(mode) ? 'l' :
+           S_ISCHR(mode) ? 'c' :
+           S_ISBLK(mode) ? 'b' :
+           S_ISFIFO(mode) ? 'p' :
+           S_ISSOCK(mode) ? 's' : '-');
+
     printf("%c", mode & S_IRUSR ? 'r' : '-');
     printf("%c", mode & S_IWUSR ? 'w' : '-');
-    printf("%c", mode & S_IXUSR ? 'x' : '-');
+
+    printf("%c", mode & S_ISUID
+           ? (mode & S_IXUSR ? 's' : 'S')
+           : (mode & S_IXUSR ? 'x' : '-'));
+
     printf("%c", mode & S_IRGRP ? 'r' : '-');
     printf("%c", mode & S_IWGRP ? 'w' : '-');
-    printf("%c", mode & S_IXGRP ? 'x' : '-');
+
+    printf("%c", mode & S_ISGID
+           ? (mode & S_IXGRP ? 's' : 'S')
+           : (mode & S_IXGRP ? 'x' : '-'));
+
     printf("%c", mode & S_IROTH ? 'r' : '-');
     printf("%c", mode & S_IWOTH ? 'w' : '-');
-    printf("%c", mode & S_IXOTH ? 'x' : '-');
+
+    printf("%c", mode & S_ISVTX
+           ? (mode & S_IXOTH ? 't' : 'T')
+           : (mode & S_IXOTH ? 'x' : '-'));
 }
+
 
 /* Print long listing */
 void print_long(const char *dir, const char *name)
@@ -188,6 +232,42 @@ void print_horizontal(char **names, int count, int max_len,
 /* List a directory; recurse into its subdirectories when -R is used */
 void do_ls(const char *dir, int mode)
 {
+
+    struct stat file_info;
+
+    if (lstat(dir, &file_info) == 0 &&
+        !S_ISDIR(file_info.st_mode)) {
+
+        if (mode == 1) {
+            char path[PATH_MAX];
+                const char *slash = strrchr(dir, '/');
+            if (slash == NULL) {
+                print_long(".", dir);
+            } else {
+                size_t dir_len = (size_t)(slash - dir);
+
+                if (dir_len == 0) {
+                    print_long("/", slash + 1);
+                } else {
+                    if (dir_len >= sizeof(path)) {
+                        fprintf(stderr, "Path too long\n");
+                        return;
+                    }
+
+                    memcpy(path, dir, dir_len);
+                    path[dir_len] = '\0';
+
+                    print_long(path, slash + 1);
+                }
+            }
+        } else {
+            print_name(dir, dir);
+            putchar('\n');
+        }
+
+        return;
+    }
+
     DIR *dp = opendir(dir);
 
     if (dp == NULL) {
